@@ -31,16 +31,29 @@ MIT License
 */
 
 #include <AirGradient.h>
+#include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
 #include <WiFiManager.h>
 #include <Wire.h>
 
 #include "SSD1306Wire.h"
+#include "config.h"
 
 AirGradient ag = AirGradient();
 
 SSD1306Wire display(0x3c, SDA, SCL);
+
+/*
+// Enable different hardware: CO2 sensor, PM2 sensor, Temp/humidity sensor
+enum HardwareOptions {
+    hoCO2 = 0x01,
+    hoPM = 0x02,
+    hoSHT = 0x04,
+};
+
+// To enable different sensors, set the proper flags.
+unsigned char hardwareOptions = hoCO2 | hoPM | hoSHT;
 
 // If false, these sensors will be disabled
 // Particulate matter sensor (PMS5003)
@@ -60,7 +73,50 @@ bool inF = false;
 bool connectWIFI = true;
 
 // Send data over WIFI to the following API endpoint
-String APIROOT = "http://hw.airgradient.com/";
+String API_ENDPOINT = "http://192.168.0.69:9000/airquality";
+*/
+
+/*
+ * A struct containing sensor data.
+ * fields:
+ *  activeHardware, a bit flag containing info about currently active hardware
+ *  pm2,            value containing PM2.5 values in PPM
+ *  co2,            value containing CO2 values in ug/m3
+ *  th,             struct containing temperature and humidity values
+ *  boardTime,      result of the millis() function
+ */
+struct SensorData {
+    unsigned char activeHardware;
+    int pm2;
+    int co2;
+    TMP_RH th;
+    unsigned long boardTime;
+};
+
+// Capacity of the JSON object payload in bytes
+const size_t JSON_CAPACITY = 512;
+
+/*
+ * Generates a payload (a JSON object) based on the sensor data
+ */
+StaticJsonDocument<JSON_CAPACITY> createPayload(SensorData &data) {
+    StaticJsonDocument<JSON_CAPACITY> json;
+
+    if (data.activeHardware & hoCO2)
+        json["co2"] = data.co2;
+
+    if (data.activeHardware & hoPM)
+        json["pm2"] = data.pm2;
+
+    if (data.activeHardware & hoSHT) {
+        json["temperature"] = data.th.t;
+        json["humidity"] = data.th.rh;
+    }
+
+    json["board_time"] = data.boardTime;
+
+    return json;
+}
 
 /*
  * Called when the sketch starts. Set up the sensors and display.
@@ -71,16 +127,16 @@ void setup() {
     display.init();
     display.flipScreenVertically();
 
-    showTextRectangle("Init", String(ESP.getChipId(), HEX), true);
+    showTextRectangle("Init", String(ESP.getChipId(), HEX), true, false);
 
-    if (hasPM)
+    if (CONFIG.hardwareOptions & hoPM)
         ag.PMS_Init();
-    if (hasCO2)
+    if (CONFIG.hardwareOptions & hoCO2)
         ag.CO2_Init();
-    if (hasSHT)
+    if (CONFIG.hardwareOptions & hoSHT)
         ag.TMP_RH_Init(0x44);
 
-    if (connectWIFI)
+    if (CONFIG.connectWifi)
         connectToWifi();
 
     delay(2000);
@@ -90,15 +146,41 @@ void setup() {
  * The main loop.
  */
 void loop() {
-    // create payload
+    struct SensorData data;
 
-    String payload = "{\"wifi\":" + String(WiFi.RSSI()) + ",";
-    int pm2 = 0;
-    int co2 = 0;
-    int temp = 0;
-    int humid = 0;
-    TMP_RH temp;
+    data.activeHardware = CONFIG.hardwareOptions;
+    data.boardTime = millis();
 
+    if (data.activeHardware & hoCO2) {
+        data.co2 = ag.getCO2_Raw();
+        delay(200);
+    }
+    if (data.activeHardware & hoPM) {
+        data.pm2 = ag.getPM2_Raw();
+        delay(200);
+    }
+    if (data.activeHardware & hoSHT) {
+        data.th = ag.periodicFetchData();
+        delay(200);
+    }
+
+    // Display sensor data on the LCD
+    displayFullStats(data);
+
+    // Generate the JSON object from SensorData
+    StaticJsonDocument<JSON_CAPACITY> json = createPayload(data);
+
+    // Send the payload off to the server
+    sendPayload(json);
+
+    // The CO2 sensor can only be queried every 2 seconds otherwise it returns erroneous values
+    delay(2000);
+
+    // send payload
+    //
+    // update display
+    //
+    /*
     if (hasPM) {
         int PM2 = ag.getPM2_Raw();
         payload = payload + "\"pm02\":" + String(PM2);
@@ -154,13 +236,76 @@ void loop() {
         http.end();
         delay(2000);
     }
+    */
+}
+
+/*
+ * Sends a JSON payload to the given address and endpoint.
+ */
+void sendPayload(StaticJsonDocument<JSON_CAPACITY> payload) {
+    if (!connectToWifi)
+        return;
+
+    // String POSTURL = API_ENDPOINT + "sensors/airgradient:" + String(ESP.getChipId(), HEX) + "/measures";
+    // Serial.println(POSTURL);
+    WiFiClient client;
+    HTTPClient http;
+    String plString;
+
+    // Store the sensor data into a JSON string
+    serializeJson(payload, plString);
+
+    http.begin(client, API_ENDPOINT);
+    http.addHeader("content-type", "application/json");
+
+    int httpCode = http.POST(plString);
+    String response = http.getString();
+
+    http.end();
+}
+
+/*
+ * Displays all stats onto the string (CO2, PM2, temperature, and humidity).
+ * Uses the tiniest font to fit everything onto the screen.
+ */
+void displayFullStats(String co2, String pm2, String temp, String hum) {
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_10);
+    display.drawString(32, 14, "CO2: " + co2);
+    display.drawString(32, 24, "PM2: " + pm2);
+    display.drawString(32, 34, "T (C): " + temp);
+    display.drawString(32, 44, "H: " + hum + "%");
+    display.display();
+}
+
+void displayFullStats(SensorData &data) {
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_10);
+
+    if (data.activeHardware & hoCO2)
+        display.drawString(32, 14, "CO2: " + String(data.co2));
+
+    if (data.activeHardware & hoPM)
+        display.drawString(32, 24, "PM2: " + String(data.pm2));
+
+    if (data.activeHardware & hoSHT) {
+        display.drawString(32, 34, "T (C): " + String(data.th.t));
+        display.drawString(32, 44, "H: " + String(data.th.rh) + "%");
+    }
+
+    display.display();
 }
 
 // DISPLAY
-void showTextRectangle(String ln1, String ln2, bool small) {
+void showTextRectangle(String ln1, String ln2, bool small, bool tiny) {
     display.clear();
     display.setTextAlignment(TEXT_ALIGN_LEFT);
-    if (small) {
+
+    if (tiny) {
+        display.setFont(ArialMT_Plain_10);
+    } else if (small) {
         display.setFont(ArialMT_Plain_16);
     } else {
         display.setFont(ArialMT_Plain_24);
