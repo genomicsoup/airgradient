@@ -16,6 +16,7 @@
 #include <ArduinoJson.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266WiFi.h>
+#include <WiFiClient.h>
 #include <WiFiManager.h>
 #include <Wire.h>
 
@@ -80,10 +81,15 @@ void setup() {
         ag.TMP_RH_Init(0x44);
 
     if (CONFIG.connectWifi)
-        connectToWifi();
+        connectToWifi(CONFIG.wifiSSID, CONFIG.wifiPassword);
 
     delay(2000);
 }
+
+/*
+ * Reset function which will restart the board.
+ */
+void (*restart)(void) = 0;
 
 /*
  * The main loop.
@@ -117,9 +123,17 @@ void loop() {
     // Send the payload off to the server
     sendPayload(json, CONFIG.apiEndpoint);
 
-    // Wait for two seconds since the CO2 sensor can only be queried at this interval otherwise
+    // Wait for ~4 seconds since the CO2 sensor can only be queried at longer intervals otherwise
     // it returns erroneous values
     delay(4200);
+
+    // Has it been longer than six hours? Restart the board. This is done to prevent erroneous
+    // CO2 values which keep popping up despite trying some of the fixes here
+    // (https://forum.airgradient.com/t/s8-co2-reading-of-1/69/60) including printing out a custom
+    // PCB.
+    if (millis() >= (12 * 60 * 60 * 1000)) {
+        restart();
+    }
 }
 
 /*
@@ -205,9 +219,6 @@ void displayFullStats(SensorData &data) {
 /*
  * Helper function to display two lines of text onto the LCD screen.
  * Uses the tiniest font to fit everything onto the screen.
- *
- * args
- *  data, SensorData object
  */
 void showTextRectangle(String ln1, String ln2, bool small, bool tiny) {
     display.clear();
@@ -227,17 +238,33 @@ void showTextRectangle(String ln1, String ln2, bool small, bool tiny) {
 }
 
 /*
+ * Same as above but displays up to four lines of text using a smaller font.
+ *
+ * args
+ *  strings, one for each line
+ */
+void showTinyTextRectangle(String ln1, String ln2, String ln3, String ln4) {
+    display.clear();
+    display.setTextAlignment(TEXT_ALIGN_LEFT);
+    display.setFont(ArialMT_Plain_10);
+
+    display.drawString(32, 16, ln1);
+    display.drawString(32, 26, ln2);
+    display.drawString(32, 36, ln3);
+    display.drawString(32, 46, ln4);
+    display.display();
+}
+
+/*
  * Connects to a wifi network.
  */
-void connectToWifi() {
-    WiFiManager wifiManager;
-    // WiFi.disconnect(); //to delete previous saved hotspot
-    String HOTSPOT = "AIRGRADIENT-" + String(ESP.getChipId(), HEX);
-    wifiManager.setTimeout(120);
-    if (!wifiManager.autoConnect((const char *)HOTSPOT.c_str())) {
-        Serial.println("failed to connect and hit timeout");
-        delay(3000);
-        ESP.restart();
-        delay(5000);
+void connectToWifi(String ssid, String password) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        showTinyTextRectangle("WIFI", "connecting...", "status: " + String(WiFi.status()), "");
     }
+    showTinyTextRectangle("WIFI", "CONNECTED", WiFi.localIP().toString(), "");
 }

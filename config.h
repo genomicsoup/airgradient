@@ -21,6 +21,8 @@ struct Config {
     unsigned char hardwareOptions;
     bool useFarenheit;
     bool connectWifi;
+    String wifiSSID;
+    String wifiPassword;
     String apiEndpoint;
     String location;
 };
@@ -30,8 +32,10 @@ struct Config CONFIG = {
     hoCO2 | hoPM | hoSHT,
     false,
     true,
-    "http://192.168.0.69:9000/airquality",
-    "office"
+    "wifi-name",
+    "wifi-password",
+    "http://127.0.0.1:9000/airquality",
+    "office",
 };
 
 #endif
