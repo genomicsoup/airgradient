@@ -7,8 +7,8 @@ The changes made to the original firmware include some code cleanup, proper JSON
 serialization, easier WIFI configuration, and integration with a custom home automation library 
 (HAL). 
 Additionally, the firmware restarts the device every six-ish hours; I've ran into some problems with
-invalid CO2 measurements (possibly a parts batch problem? I've built two devices using two 
-different PCBs, one of which I printed myself). Restarting the board seems to fix the issue.
+invalid CO2 measurements (possibly a parts batch problem?) despite building two devices using two 
+different PCBs, one of which I printed myself. Restarting the board seems to fix the issue.
 
 ## Development
 
